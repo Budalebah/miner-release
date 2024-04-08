@@ -15,26 +15,6 @@ def get_local_model_ids(config):
     local_model_ids = [model['name'] for model in config.model_configs.values() if model['name'] + ".safetensors" in local_files]
     return local_model_ids
 
-def load_lora(pipe, config, lora_id="xl_more_art-full"):
-    # Verify lora_id exists in the config's lora configurations
-    if lora_id not in config.lora_configs:
-        raise ValueError(f"LoRa ID '{lora_id}' not found in configuration.")
-    
-    # Construct the path to the LoRa weights file
-    lora_name = f"{lora_id}.safetensors"
-    lora_path = os.path.join(config.base_dir, lora_name)
-    
-    if not os.path.exists(lora_path):
-        raise FileNotFoundError(f"LoRa weights file '{lora_path}' not found.")
-    try:
-        pipe.load_lora_weights(lora_path)
-        config.loaded_loras[lora_id] = pipe
-        return pipe
-    except Exception as e:
-        # It's a good practice to catch and handle or log specific exceptions
-        print(f"Failed to load LoRa weights for '{lora_id}': {e}")
-        raise
-
 def load_model(config, model_id):
     # Error handling for excluded sdxl models
     if config.exclude_sdxl and model_id.startswith("SDXL"):
@@ -73,6 +53,35 @@ def load_model(config, model_id):
 def unload_model(config, model_id):
     if model_id in config.loaded_models:
         del config.loaded_models[model_id]
+        torch.cuda.empty_cache()
+        gc.collect()
+
+def load_lora(pipe, config, lora_id="xl_more_art-full"):
+    # Verify lora_id exists in the config's lora configurations
+    if lora_id not in config.lora_configs:
+        raise ValueError(f"LoRa ID '{lora_id}' not found in configuration.")
+    
+    # Construct the path to the LoRa weights file
+    lora_name = f"{lora_id}.safetensors"
+    lora_path = os.path.join(config.base_dir, lora_name)
+    
+    if not os.path.exists(lora_path):
+        raise FileNotFoundError(f"LoRa weights file '{lora_path}' not found.")
+    try:
+        pipe.load_lora_weights(lora_path)
+        config.loaded_loras[lora_id] = pipe
+        return pipe
+    except Exception as e:
+        # It's a good practice to catch and handle or log specific exceptions
+        print(f"Failed to load LoRa weights for '{lora_id}': {e}")
+        raise
+
+def unload_lora(config, current_model):
+    if config.loaded_loras:
+        previous_lora_id = next(iter(config.loaded_loras))
+        del config.loaded_loras[previous_lora_id]
+        current_model.unload_lora_weights()
+        logging.debug(f"Unloaded LoRa weights for '{previous_lora_id}' to free up resources.")
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -120,36 +129,31 @@ def execute_model(config, model_id, prompt, neg_prompt, height, width, num_itera
 
         logging.debug(f"Executing model {model_id} with parameters: {kwargs}")
 
-        # Unload any previously loaded LoRa weights if not the same as the current one needed
-        if config.loaded_loras:
-            del config.loaded_loras[next(iter(config.loaded_loras))]
-            current_model.unload_lora_weights()
-            logging.debug(f"Unloaded LoRa weights to free up resources.")
-            torch.cuda.empty_cache()
-            gc.collect()
-        
         lora_pattern = re.compile(r"<lora:([^:>]+):(\d+)>")
         match = lora_pattern.search(prompt)
         if match:
-            lora_id = match.group(1)
             try:
-                start_time = time.time()
-                current_model_with_lora = load_lora(current_model, config, lora_id)
-                end_time = time.time()
-                print(f"LoRa weights for '{lora_id}' loaded successfully with {end_time-start_time} seconds")
+                s_time = time.time()
+                lora_id = match.group(1)
+                if lora_id in config.loaded_loras:
+                    current_model_with_lora = config.loaded_loras[lora_id]
+                else:
+                    unload_lora(config, current_model)
+                    current_model_with_lora = load_lora(current_model, config, lora_id)
+                e_time = time.time()
+                print(f"LoRa weights for '{lora_id}' loaded successfully with {e_time-s_time} seconds")
             except Exception as e:
                 print(f"Error loading LoRa weights for '{lora_id}': {e}")
-            # Start measuring inference time
             inference_start_time = time.time()                
             images = current_model_with_lora(prompt, **kwargs).images
+            inference_end_time = time.time()
         else:
-            # No LoRa signal found, proceed without loading LoRa weights
-            inference_start_time = time.time()
+            # Unload any previously loaded LoRa weights if not the same as the current one needed
+            unload_lora(config, current_model)
+            inference_start_time = time.time()                
             images = current_model(prompt, **kwargs).images
-
-        # End measuring inference time
-        inference_end_time = time.time()
-
+            inference_end_time = time.time()
+        
         # Calculate and log the inference latency
         inference_latency = inference_end_time - inference_start_time
 
