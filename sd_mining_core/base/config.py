@@ -1,5 +1,4 @@
 import os
-import sys
 import toml
 import time
 
@@ -16,6 +15,7 @@ class BaseConfig:
         self.log_filename = self.config['logging'].get('sd_log_filename', 'sd_miner.log')
         self.base_url = self.config['service']['base_url']
         self.signal_url = self.config['service']['signal_url']
+        self.lora_config_url = self.config['model_config']['lora_config_url']
         self.s3_bucket = self.config['storage']['s3_bucket']
         self.base_dir = os.path.expanduser(self.config['storage'].get('base_dir', '.'))
         self.model_config_url = self.config['model_config']['model_config_url']
@@ -26,8 +26,10 @@ class BaseConfig:
         self.reload_interval = int(self.config['system'].get('reload_interval', 600))
         self.last_heartbeat = time.time() - 10000
         self.loaded_models = {}
+        self.loaded_loras = {}
         self.model_configs = {}
         self.vae_configs = {}
+        self.lora_configs = {}
         self.log_level = log_level
         self.auto_confirm = auto_confirm
         self.exclude_sdxl = exclude_sdxl

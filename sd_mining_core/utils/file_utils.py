@@ -22,6 +22,7 @@ def fetch_and_download_config_files(config):
     try:
         models = requests.get(config.model_config_url).json()
         vaes = requests.get(config.vae_config_url).json()
+        loras = requests.get(config.lora_config_url).json()
         config.model_configs = {
             model['name']: model
             for model in models
@@ -32,6 +33,16 @@ def fetch_and_download_config_files(config):
             vae['name']: vae
             for vae in vaes
         }
+
+        config.lora_configs = { 
+            lora['name']: lora
+            for lora in loras 
+        }
+
+        # Merge LoRa configs into model_configs (assuming model_configs already populated)
+        for lora in loras:
+            lora['type'] = lora.get('base_type', '')  # Ensure 'type' field exists for uniformity
+            config.model_configs[lora['name']] = lora
 
         total_size = 0
         files_to_download = []
