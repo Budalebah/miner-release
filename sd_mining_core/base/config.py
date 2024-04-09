@@ -4,7 +4,7 @@ import time
 from .lora_cache import LoRACache
 
 class BaseConfig:
-    def __init__(self, config_file, cuda_device_id=0, log_level="INFO", auto_confirm=False, exclude_sdxl=False, lora_cache_capacity=4):
+    def __init__(self, config_file, cuda_device_id=0, log_level="INFO", auto_confirm=False, exclude_sdxl=False, enable_lora=False, lora_cache_capacity=3):
         try:
             self.config = toml.load(config_file)
         except Exception as e:
@@ -35,6 +35,7 @@ class BaseConfig:
         self.log_level = log_level
         self.auto_confirm = auto_confirm
         self.exclude_sdxl = exclude_sdxl
+        self.enable_lora = enable_lora
         self.version = self.config['versions'].get('sd_version', 'unknown')
 
         # Initialize the LoRACache instance with the specified capacity
