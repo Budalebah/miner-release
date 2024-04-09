@@ -1,10 +1,10 @@
 import os
 import toml
 import time
+from .lora_cache import LoRACache
 
 class BaseConfig:
-
-    def __init__(self, config_file, cuda_device_id=0, log_level="INFO", auto_confirm=False, exclude_sdxl=False):
+    def __init__(self, config_file, cuda_device_id=0, log_level="INFO", auto_confirm=False, exclude_sdxl=False, lora_cache_capacity=4):
         try:
             self.config = toml.load(config_file)
         except Exception as e:
@@ -20,7 +20,9 @@ class BaseConfig:
         self.base_dir = os.path.expanduser(self.config['storage'].get('base_dir', '.'))
         self.model_config_url = self.config['model_config']['model_config_url']
         self.vae_config_url = self.config['model_config']['vae_config_url']
+
         os.makedirs(self.base_dir, exist_ok=True)
+
         self.min_deadline = int(self.config['system'].get('min_deadline', 60))
         self.sleep_duration = int(self.config['system'].get('sleep_duration', 2))
         self.reload_interval = int(self.config['system'].get('reload_interval', 600))
@@ -34,3 +36,6 @@ class BaseConfig:
         self.auto_confirm = auto_confirm
         self.exclude_sdxl = exclude_sdxl
         self.version = self.config['versions'].get('sd_version', 'unknown')
+
+        # Initialize the LoRACache instance with the specified capacity
+        self.lora_cache = LoRACache(lora_cache_capacity)

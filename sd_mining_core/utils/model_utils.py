@@ -6,7 +6,7 @@ import io
 import gc
 import logging
 import time
-from diffusers import AutoencoderKL, DPMSolverMultistepScheduler
+from diffusers import AutoencoderKL, DPMSolverMultistepScheduler, StableDiffusionXLPipeline
 from vendor.lpw_stable_diffusion_xl import StableDiffusionXLLongPromptWeightingPipeline
 from vendor.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 
@@ -34,7 +34,7 @@ def load_model(config, model_id):
         pipe = StableDiffusionLongPromptWeightingPipeline.from_single_file(model_file_path, torch_dtype=torch.float16).to('cuda:' + str(config.cuda_device_id))
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="sde-dpmsolver++")
     else:
-        pipe = StableDiffusionXLLongPromptWeightingPipeline.from_single_file(model_file_path, torch_dtype=torch.float16).to('cuda:' + str(config.cuda_device_id))
+        pipe = StableDiffusionXLPipeline.from_single_file(model_file_path, torch_dtype=torch.float16).to('cuda:' + str(config.cuda_device_id))
     pipe.safety_checker = None
     # TODO: Add support for other schedulers
 
@@ -68,8 +68,12 @@ def load_lora(pipe, config, lora_id="xl_more_art-full"):
     if not os.path.exists(lora_path):
         raise FileNotFoundError(f"LoRa weights file '{lora_path}' not found.")
     try:
-        pipe.load_lora_weights(lora_path)
-        config.loaded_loras[lora_id] = pipe
+        unique_id = config.lora_cache.get_unique_id(lora_id)
+        if unique_id is None:
+            unique_id = f"de_{len(config.lora_cache.unique_ids)}"
+            config.lora_cache.unique_ids[lora_id] = unique_id
+        pipe.load_lora_weights(lora_path, adapter_name=unique_id)
+        pipe.set_adapters(config.lora_cache.get_unique_id(lora_id))
         return pipe
     except Exception as e:
         # It's a good practice to catch and handle or log specific exceptions
@@ -77,20 +81,32 @@ def load_lora(pipe, config, lora_id="xl_more_art-full"):
         raise
 
 def unload_lora(config, current_model):
-    if config.loaded_loras:
-        previous_lora_id = next(iter(config.loaded_loras))
-        del config.loaded_loras[previous_lora_id]
+    if config.lora_cache.cache:
+        lora_id = next(iter(config.lora_cache.cache))
         current_model.unload_lora_weights()
-        logging.debug(f"Unloaded LoRa weights for '{previous_lora_id}' to free up resources.")
+        logging.debug(f"Unloaded LoRa weights for '{lora_id}' to free up resources.")
+        # Remove the unloaded LoRa model from the cache
+        config.lora_cache.remove(lora_id)
         torch.cuda.empty_cache()
         gc.collect()
+
+def load_lora_with_cache(config, current_model, lora_id):
+    cached_model = config.lora_cache.get(lora_id)
+    if cached_model is not None:
+        cached_model.set_adapters(config.lora_cache.get_unique_id(lora_id))
+        print(f"Using cached lora with identifier: {lora_id}")
+        return cached_model
+
+    print("Loading new lora")
+    current_model_with_lora = load_lora(current_model, config, lora_id)
+    config.lora_cache.put(lora_id, current_model_with_lora)
+    return current_model_with_lora
 
 def load_default_model(config):
     model_ids = get_local_model_ids(config)
     if not model_ids:
         logging.error("No local models found. Exiting...")
         sys.exit(1)  # Exit if no models are available locally
-
     default_model_id = model_ids[8]
 
     if default_model_id not in config.loaded_models:
@@ -133,23 +149,23 @@ def execute_model(config, model_id, prompt, neg_prompt, height, width, num_itera
         match = lora_pattern.search(prompt)
         if match:
             try:
+                current_model.enable_lora()
                 s_time = time.time()
                 lora_id = match.group(1)
-                if lora_id in config.loaded_loras:
-                    current_model_with_lora = config.loaded_loras[lora_id]
-                else:
-                    unload_lora(config, current_model)
-                    current_model_with_lora = load_lora(current_model, config, lora_id)
+                current_model_with_lora = load_lora_with_cache(config, current_model, lora_id)
                 e_time = time.time()
                 print(f"LoRa weights for '{lora_id}' loaded successfully with {e_time-s_time} seconds")
             except Exception as e:
                 print(f"Error loading LoRa weights for '{lora_id}': {e}")
-            inference_start_time = time.time()                
+            print("Active adapters", current_model_with_lora.get_active_adapters())
+            print("Lits of cache", current_model_with_lora.get_list_adapters())
+            inference_start_time = time.time()
             images = current_model_with_lora(prompt, **kwargs).images
             inference_end_time = time.time()
+
         else:
             # Unload any previously loaded LoRa weights if not the same as the current one needed
-            unload_lora(config, current_model)
+            current_model.disable_lora()
             inference_start_time = time.time()                
             images = current_model(prompt, **kwargs).images
             inference_end_time = time.time()

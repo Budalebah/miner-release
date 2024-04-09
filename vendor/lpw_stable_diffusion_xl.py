@@ -2162,6 +2162,7 @@ class StableDiffusionXLLongPromptWeightingPipeline(
                 prefix="text_encoder_2",
                 lora_scale=self.lora_scale,
             )
+            
 
     @classmethod
     def save_lora_weights(
